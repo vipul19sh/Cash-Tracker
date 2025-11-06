@@ -74,10 +74,41 @@ button.secondary{background:#30363d;}
   max-height:220px;overflow-y:auto;margin-top:12px;
   background:#0d1117;border-radius:8px;padding:10px;font-size:14px;
 }
-.hidden{display:none;}
+.hidden{
+  display:none !important;
+  visibility:hidden !important;
+  opacity:0 !important;
+}
+
+/* NEW: Popup styling */
+.popup-overlay{
+  position:fixed;top:0;left:0;width:100%;height:100%;
+  background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;
+  z-index:1000;
+}
+.popup{
+  background:var(--panel);padding:24px;border-radius:12px;max-width:400px;width:90%;
+  box-shadow:0 0 20px rgba(0,0,0,0.5);
+}
+.popup table{width:100%;margin-bottom:16px;}
+.popup h3{text-align:center;margin-bottom:16px;}
+.popup input[type=number]{width:60px;text-align:center;background:#0d1117;color:var(--text);border:none;font-size:16px;}
+.popup .actions{display:flex;justify-content:space-between;}
 </style>
 </head>
 <body>
+<script>
+// Force popup hidden before anything else loads (prevents stuck open state)
+document.addEventListener("DOMContentLoaded", ()=>{
+  const p=document.getElementById("manualPopup");
+  if(p){
+    p.classList.add("hidden");
+    p.style.display="none";
+    // remove display:none later when opening
+    setTimeout(()=>p.style.display="",0);
+  }
+});
+</script>
 
 <div class="container" id="setupContainer">
   <h3>Set Opening Balance</h3>
@@ -90,10 +121,14 @@ button.secondary{background:#30363d;}
     <div class="side">
       <h3>Customer Gave</h3>
       <div class="quick-buttons" id="customerBtns"></div>
+      <!-- NEW -->
+      <button class="accent" style="margin-top:10px;width:100%;" onclick="openManualPopup('received')">Manual Entry</button>
     </div>
     <div class="side">
       <h3>Change Given</h3>
       <div class="quick-buttons" id="changeBtns"></div>
+      <!-- NEW -->
+      <button class="danger" style="margin-top:10px;width:100%;" onclick="openManualPopup('given')">Manual Entry</button>
     </div>
   </div>
 
@@ -109,26 +144,37 @@ button.secondary{background:#30363d;}
   <div id="logBox" class="hidden"></div>
 </div>
 
+<!-- NEW: Manual Entry Popup -->
+<div class="popup-overlay hidden" id="manualPopup">
+  <div class="popup">
+    <h3 id="popupTitle">Manual Entry</h3>
+    <table id="popupTable"><tr><th>₹</th><th>Count</th></tr></table>
+    <div class="actions">
+      <button class="secondary" onclick="closeManualPopup()">Cancel</button>
+      <button class="success" onclick="submitManualPopup()">Add</button>
+    </div>
+  </div>
+</div>
 <script>
 const denominations=[500,200,100,50,20,10,5,2,1];
 let cashData={}; let transactions=[]; let undoStack=[];
+let currentManualType=null;
 const today=new Date().toISOString().split('T')[0];
 const storageKey=`cashData_${today}`;
 const txnKey=`transactions_${today}`;
 const tbody=document.querySelector("#startingCashTable tbody");
 
-// Initialize opening balance table with + and - buttons
+// ====== INITIAL TABLE SETUP ======
 denominations.forEach(d=>{
  const row=document.createElement("tr");
  row.innerHTML=`<td>₹${d}</td>
  <td><div style="display:flex;align-items:center;justify-content:center;gap:6px;">
  <button class='secondary' onclick="adjust('${d}',-1)">-</button>
- <input type='text' id='denom_${d}' value='0' readonly>
+ <input type='text' id='denom_${d}' value='0' oninput="manualEdit('${d}', this.value)">
  <button class='secondary' onclick="adjust('${d}',1)">+</button></div></td>`;
  tbody.appendChild(row);
 });
 
-// Adjust cash table and auto-update
 function adjust(denom,diff){
   const el=document.getElementById(`denom_${denom}`);
   let v=parseInt(el.value)||0;
@@ -136,8 +182,14 @@ function adjust(denom,diff){
   el.value=v;
   if(cashData[denom]!==undefined){ cashData[denom]=v; updateSummary(); saveData(); }
 }
+function manualEdit(denom,val){
+  let num=parseInt(val);
+  if(isNaN(num)||num<0) num=0;
+  cashData[denom]=num;
+  updateSummary(); saveData();
+}
 
-// Restore saved day if exists
+// ====== RESTORE DAY ======
 function restoreDay(){
   const savedCash=JSON.parse(localStorage.getItem(storageKey)||"{}");
   const savedTxns=JSON.parse(localStorage.getItem(txnKey)||"[]");
@@ -145,15 +197,14 @@ function restoreDay(){
     cashData=savedCash; transactions=savedTxns;
     document.getElementById("setupContainer").classList.add("hidden");
     document.getElementById("mainContainer").classList.remove("hidden");
-    buildButtons();
-    updateSummary();
-    refreshLog();
-    // Update table inputs too
+    buildButtons(); updateSummary(); refreshLog();
     denominations.forEach(d=>{
       const el=document.getElementById(`denom_${d}`);
-      if(el) el.value = cashData[d]||0;
+      if(el) el.value=cashData[d]||0;
     });
   }
+  // Always hide popup on load
+  document.getElementById("manualPopup").classList.add("hidden");
 }
 
 function startDay(){
@@ -169,6 +220,7 @@ function saveData(){
   localStorage.setItem(txnKey,JSON.stringify(transactions));
 }
 
+// ====== BUILD BUTTONS ======
 function buildButtons(){
   const c=document.getElementById("customerBtns"),g=document.getElementById("changeBtns");
   c.innerHTML=""; g.innerHTML="";
@@ -197,6 +249,7 @@ function undo(){
   }
 }
 
+// ====== SUMMARY ======
 function updateSummary(){
   let total=0;
   let html="<table><tr><th>₹</th><th>Count</th><th>Amount</th></tr>";
@@ -231,9 +284,61 @@ function endDay(){
   location.reload();
 }
 
-// Restore day on load
+// ====== FIXED: MANUAL ENTRY POPUP ======
+function openManualPopup(type){
+  currentManualType=type;
+  const popup=document.getElementById("manualPopup");
+  const table=document.getElementById("popupTable");
+  document.getElementById("popupTitle").textContent =
+    type==="received"?"Manual Entry - Customer Gave":"Manual Entry - Change Given";
+  table.innerHTML="<tr><th>₹</th><th>Count</th></tr>";
+  denominations.forEach(d=>{
+    const row=document.createElement("tr");
+    row.innerHTML=`<td>₹${d}</td><td><input type='number' id='popup_denom_${d}' min='0' value='0'></td>`;
+    table.appendChild(row);
+  });
+  popup.classList.remove("hidden");
+}
+
+function closeManualPopup(){
+  const popup=document.getElementById("manualPopup");
+  popup.classList.add("hidden");
+  currentManualType=null;
+}
+
+function submitManualPopup(){
+  if(!currentManualType) return closeManualPopup();
+  undoStack.push(JSON.parse(JSON.stringify(cashData)));
+  denominations.forEach(d=>{
+    const val=parseInt(document.getElementById(`popup_denom_${d}`).value)||0;
+    if(val>0){
+      if(currentManualType==="received") cashData[d]+=val;
+      else if(cashData[d]>=val) cashData[d]-=val;
+      else alert(`Not enough ₹${d} notes to give ${val}!`);
+      for(let i=0;i<val;i++){
+        transactions.push({time:new Date().toLocaleTimeString(),denom:d,type:currentManualType});
+      }
+    }
+  });
+  saveData(); updateSummary(); refreshLog();
+  closeManualPopup();
+}
+
+// ====== EXTRA SAFETY FIXES ======
+// Always hide popup on ESC key
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape") closeManualPopup();
+});
+// Allow click on dark background to close
+document.getElementById("manualPopup").addEventListener("click",e=>{
+  if(e.target.id==="manualPopup") closeManualPopup();
+});
+
+// Restore day safely
 window.onload = restoreDay;
 </script>
 
+
 </body>
+
 </html>
